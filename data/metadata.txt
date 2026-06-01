@@ -1,0 +1,104 @@
+================================================================================
+DATASET METADATA
+Project : Flood Water Depth Prediction (FloodDCRNN / TFNO)
+Created : 2026-06-01
+================================================================================
+
+OVERVIEW
+--------
+Simulated flood dataset for Barbados covering 200 synthetic storm events.
+Each sample contains per-timestep water depth, precipitation, and velocity
+fields derived from a hydrodynamic simulation, plus domain-wide static layers.
+
+--------------------------------------------------------------------------------
+SPATIAL DOMAIN
+--------------------------------------------------------------------------------
+Region          : Barbados
+CRS             : EPSG:4326 (geographic, WGS84)
+Bounding Box    : West  -59.6601°, East  -59.4001°
+                  South  13.0401°, North  13.3401°
+Pixel Size      : 0.0002778° (~30 m at equator)
+Raster Size     : 936 columns × 1080 rows
+
+--------------------------------------------------------------------------------
+TEMPORAL DOMAIN
+--------------------------------------------------------------------------------
+Simulation Length : 72 hours per event
+Timestep Interval : 0.25 hours (15 minutes)
+Number of Steps   : 289 (t = 0.00 hr to t = 72.00 hr, inclusive)
+
+--------------------------------------------------------------------------------
+DATASET STRUCTURE
+--------------------------------------------------------------------------------
+data/
+├── samples/
+│   ├── sample1/
+│   │   ├── depth.sampleN.tif       — water depth time series (289 bands, int16, mm)
+│   │   ├── pcpout.sampleN.tif      — precipitation time series (289 bands, int16, mm)
+│   │   ├── u.sampleN.tif           — x-velocity time series (289 bands, int16)
+│   │   ├── v.sampleN.tif           — y-velocity time series (289 bands, int16)
+│   │   ├── dmax.sampleN.tif        — maximum water depth over event (1 band, uint8)
+│   │   ├── depth_timesteps/        — per-timestep depth TIFs (depth_hr0000.00.tif …)
+│   │   └── pcpout_timesteps/       — per-timestep precip TIFs (pcpout_hr0000.00.tif …)
+│   ├── sample2/ … sample200/
+└── parms_bands/                 — static domain parameters (shared across all samples)
+    ├── dem.tif                  — Digital Elevation Model (float32, meters)
+    ├── slope.tif                — Terrain slope (float32)
+    ├── manning_coef.tif         — Manning's roughness coefficient (float32)
+    ├── pervious_cover.tif       — Pervious surface fraction (float32)
+    ├── soil_type.tif            — Soil classification (float32)
+    ├── land_mask.tif            — Land/water mask (uint8)
+    └── dem_patches/             — DEM split into 4 spatial patches
+        ├── dem_patch_00_r0000_c0000.tif
+        ├── dem_patch_01_r0000_c0424.tif
+        ├── dem_patch_02_r0568_c0000.tif
+        └── dem_patch_03_r0568_c0424.tif
+
+--------------------------------------------------------------------------------
+VARIABLE DESCRIPTIONS
+--------------------------------------------------------------------------------
+
+Dynamic Variables (per sample, 289 timesteps)
+----------------------------------------------
+Variable   File            Bands  dtype   Unit   Description
+--------   ----            -----  -----   ----   -----------
+depth      depth.tif       289    int16   mm     Simulated water depth at each timestep
+pcpout     pcpout.tif      289    int16   mm     Accumulated precipitation per 0.25-hr interval
+u          u.tif           289    int16   —      X-component (east) of depth-averaged velocity
+v          v.tif           289    int16   —      Y-component (north) of depth-averaged velocity
+dmax       dmax.tif        1      uint8   —      Maximum water depth over the full 72-hr event
+
+Band naming convention for split timesteps:
+  depth_hr0000.00.tif  → t = 0.00 hr
+  depth_hr0000.25.tif  → t = 0.25 hr
+  ...
+  depth_hr0072.00.tif  → t = 72.00 hr
+
+Static Variables (shared, in parms_bands/)
+------------------------------------------
+Variable         File               dtype    Description
+--------         ----               -----    -----------
+DEM              dem.tif            float32  Digital elevation model (m)
+Slope            slope.tif          float32  Local terrain slope
+Manning's n      manning_coef.tif   float32  Surface roughness coefficient
+Pervious cover   pervious_cover.tif float32  Fraction of pervious land cover
+Soil type        soil_type.tif      float32  Soil classification index
+Land mask        land_mask.tif      uint8    1 = land, 0 = ocean/water
+
+--------------------------------------------------------------------------------
+MODEL CONTEXT
+--------------------------------------------------------------------------------
+Target model     : FloodDCRNN (src_temporalspatial/model.py)
+Architecture     : Diffusion Convolutional RNN (DCRNN) over a spatial graph
+Init features    : current water depth + static parameters  → (B, N, D1)
+Dynamic features : per-step rainfall + static parameters    → (B, T, N, D2)
+Output           : predicted water depth                    → (B, T, N, 1)
+
+--------------------------------------------------------------------------------
+STATISTICS
+--------------------------------------------------------------------------------
+Total samples    : 200
+Archive size     : ~36 GB (samples.zip)
+Files per sample : 5 multi-band TIFs + 289×2 split timestep TIFs + aux files
+
+================================================================================

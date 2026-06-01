@@ -1,0 +1,11 @@
+data/samples/
+data/samples.zip
+data/parms_bands/dem_patches/
+*.tif
+*.tif.aux.xml
+__pycache__/
+*.pyc
+*.pth
+outputs/
+predictions/
+logs/

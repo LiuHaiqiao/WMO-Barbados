@@ -1,0 +1,27 @@
+# Core deep learning — install CUDA-specific wheels manually:
+#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchvision==0.21.0
+
+# PyTorch Geometric — install matching CUDA wheels:
+#   pip install torch-geometric
+#   pip install pyg-lib torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+torch-geometric==2.7.0
+
+# Neural operator (FNO/TFNO)
+neuralop==2.0.0
+
+# Training framework
+pytorch-lightning==2.6.1
+
+# Geospatial I/O
+rasterio==1.4.4
+
+# Numerics / visualisation
+numpy==2.2.6
+matplotlib==3.10.9
+einops==0.8.2
+
+# Utilities
+tqdm==4.67.3
+imageio==2.37.3
