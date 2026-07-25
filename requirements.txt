@@ -1,27 +1,167 @@
-# Core deep learning — install CUDA-specific wheels manually:
-#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0
-torchvision==0.21.0
-
-# PyTorch Geometric — install matching CUDA wheels:
-#   pip install torch-geometric
-#   pip install pyg-lib torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
-torch-geometric==2.7.0
-
-# Neural operator (FNO/TFNO)
-neuralop==2.0.0
-
-# Training framework
-pytorch-lightning==2.6.1
-
-# Geospatial I/O
-rasterio==1.4.4
-
-# Numerics / visualisation
+# Frozen from the training environment: /work/hl1138/envs/py310 (Python 3.10.19)
+# on a CUDA 12.8 host. Install with:
+#   pip install -r requirements.txt \
+#     --extra-index-url https://download.pytorch.org/whl/cu128 \
+#     -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
+# The torch/torchvision/torchaudio and torch_scatter/torch_sparse/torch_cluster/
+# torch_spline_conv lines below carry +cu128 / +pt28cu128 local version tags —
+# these builds are not on plain PyPI and require the index/links above.
+absl-py==2.3.1
+accelerate==1.13.0
+affine==2.4.0
+aiobotocore==2.26.0
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.2
+aioitertools==0.13.0
+aiosignal==1.4.0
+albucore==0.0.24
+albumentations==2.0.8
+annotated-types==0.7.0
+anyio==4.12.0
+asciitree==0.3.3
+async-timeout==5.0.1
+attrs==25.4.0
+botocore==1.41.5
+certifi==2025.11.12
+charset-normalizer==3.4.4
+click==8.3.1
+click-plugins==1.1.1.2
+cligj==0.7.2
+cmake==4.2.0
+configmypy==0.2.0
+contourpy==1.3.2
+cycler==0.12.1
+Cython==3.2.5
+DateTime==6.0
+decorator==4.4.2
+dgl==2.4.0+cu124
+einops==0.8.1
+exceptiongroup==1.3.1
+fasteners==0.20
+filelock==3.20.0
+fonttools==4.61.1
+frozenlist==1.8.0
+fsspec==2025.12.0
+geopandas==1.1.3
+gitdb==4.0.12
+GitPython==3.1.50
+grpcio==1.76.0
+h11==0.16.0
+h5py==3.16.0
+hf-xet==1.2.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==1.2.3
+idna==3.11
+ImageIO==2.37.2
+iniconfig==2.3.0
+Jinja2==3.1.6
+jmespath==1.0.1
+joblib==1.5.3
+kiwisolver==1.4.9
+kogger==0.1.2
+lazy_loader==0.4
+lightning-utilities==0.15.2
+Markdown==3.10
+MarkupSafe==3.0.3
+matplotlib==3.10.8
+ml_dtypes==0.5.4
+mpmath==1.3.0
+multidict==6.7.0
+networkx==3.4.2
+neuraloperator==2.0.0
+numcodecs==0.13.1
 numpy==2.2.6
-matplotlib==3.10.9
-einops==0.8.2
-
-# Utilities
-tqdm==4.67.3
-imageio==2.37.3
+nvidia-cublas-cu12==12.8.4.1
+nvidia-cuda-cupti-cu12==12.8.90
+nvidia-cuda-nvrtc-cu12==12.8.93
+nvidia-cuda-runtime-cu12==12.8.90
+nvidia-cudnn-cu12==9.10.2.21
+nvidia-cufft-cu12==11.3.3.83
+nvidia-cufile-cu12==1.13.1.3
+nvidia-curand-cu12==10.3.9.90
+nvidia-cusolver-cu12==11.7.3.90
+nvidia-cusparse-cu12==12.5.8.93
+nvidia-cusparselt-cu12==0.7.1
+nvidia-nccl-cu12==2.27.3
+nvidia-nvjitlink-cu12==12.8.93
+nvidia-nvshmem-cu12==3.3.20
+nvidia-nvtx-cu12==12.8.90
+nvidia-physicsnemo==1.1.0
+onnx==1.20.0
+opencv-python==4.13.0.92
+opencv-python-headless==4.13.0.92
+opt_einsum==3.4.0
+packaging==25.0
+pandas==2.3.3
+pillow==12.0.0
+platformdirs==4.10.0
+pluggy==1.6.0
+propcache==0.4.1
+protobuf==6.33.2
+psutil==7.1.3
+pycocotools==2.0.11
+pydantic==2.12.5
+pydantic_core==2.41.5
+pyg-lib==0.5.0+pt28cu128
+Pygments==2.20.0
+pyogrio==0.12.1
+pyparsing==3.2.5
+pyproj==3.7.1
+pytest==9.0.3
+pytest-mock==3.15.1
+python-dateutil==2.9.0.post0
+pytorch-lightning==2.6.0
+pytz==2025.2
+PyYAML==6.0.3
+rasterio==1.4.4
+requests==2.32.5
+ruamel.yaml==0.19.1
+s3fs==2025.12.0
+safetensors==0.7.0
+scikit-image==0.25.2
+scikit-learn==1.7.2
+scipy==1.15.3
+sentry-sdk==2.61.0
+shapely==2.1.2
+shellingham==1.5.4
+simsimd==6.5.13
+six==1.17.0
+smmap==5.0.3
+stringzilla==4.6.0
+sympy==1.14.0
+tensorboard==2.20.0
+tensorboard-data-server==0.7.2
+tensorly==0.9.0
+tensorly-torch==0.5.0
+threadpoolctl==3.6.0
+tifffile==2025.5.10
+timm==1.0.22
+tomli==2.4.1
+torch==2.8.0+cu128
+torch-geometric==2.7.0
+torch_cluster==1.6.3+pt28cu128
+torch_geometric_temporal==0.56.2
+torch_scatter==2.1.2+pt28cu128
+torch_sparse==0.6.18+pt28cu128
+torch_spline_conv==1.2.2+pt28cu128
+torchaudio==2.8.0+cu128
+torchmetrics==1.8.2
+torchvision==0.23.0+cu128
+tqdm==4.67.1
+treelib==1.8.0
+triton==3.4.0
+typer-slim==0.20.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2025.2
+urllib3==2.6.2
+wandb==0.27.0
+Werkzeug==3.1.4
+wrapt==1.17.3
+xarray==2025.6.1
+xxhash==3.6.0
+yarl==1.22.0
+zarr==2.18.3
+zencfg==0.7.0
+zope.interface==8.2
