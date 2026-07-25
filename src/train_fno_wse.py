@@ -1,16 +1,33 @@
 """
-train_fno.py — PyTorch Lightning training script for TFNOFlood.
+train_fno_wse.py — PyTorch Lightning training script for TFNOFlood, WSE variant.
+
+Unlike train_fno.py, the network does NOT work in water depth directly.
+data_loader_wse.py serves the water-surface elevation (WSE = DEM + depth,
+normalised by NORM_DEM — the same scale as the DEM input channel) as both
+the dynamic input state and the rollout targets, and the network output is
+WSE as well — the rollout feeds predicted WSE straight back in. For the
+losses, metrics, and TensorBoard figures, water depth is recovered by
+de-normalising the WSE and reducing the DEM from it:
+
+    depth_m = wse * NORM_DEM - dem_m
+
+so all losses and logged metrics are in METRES (train_fno.py logs are in
+normalised-depth units, 1 unit = 30 m). The depth thresholds inside the
+flood losses (_WET_THRESH = 0.01 m, extent sigma 0.05 m) are literal here.
+
+Checkpoints record predict_wse=True and wse_input=True in model_cfg — use
+inference_wse.py (not inference.py) to run them.
 
 Usage
 -----
 # single GPU
-python train_fno.py --data_dirs /home/hl1138/TFNO/data
+python train_fno_wse.py --data_dirs /home/hl1138/TFNO/data
 
 # multiple simulation dirs
-python train_fno.py --data_dirs /path/sim1 /path/sim2 --batch_size 8
+python train_fno_wse.py --data_dirs /path/sim1 /path/sim2 --batch_size 8
 
 # resume from checkpoint
-python train_fno.py --data_dirs /home/hl1138/TFNO/data --ckpt_path logs/tfno/version_0/checkpoints/best.ckpt
+python train_fno_wse.py --data_dirs /home/hl1138/TFNO/data --ckpt_path logs/tfno_wse/version_0/checkpoints/best.ckpt
 """
 
 import argparse
@@ -32,7 +49,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 
 from torchmetrics.functional.image import structural_similarity_index_measure as ssim_metric
 
-from data_loader import build_loaders, NORM_DEPTH
+from data_loader_wse import build_loaders, NORM_DEM
 from fno_model import TFNOFlood
 
 
@@ -141,15 +158,8 @@ class FNOLitModel(pl.LightningModule):
         return 1.0 - ssim_val
 
     # ---- flood-focused helpers (threshold in metres) ---------------------- #
-    #
-    # pred/target here are normalised depth (raw_mm / NORM_DEPTH), NOT metres —
-    # thresholds expressed in physical units must be divided by NORM_DEPTH
-    # before comparing against these tensors, or they silently apply at the
-    # wrong physical scale.
-    _WET_THRESH_MM   = 10.0   # 1 cm — pixels with GT depth above this are "wet"
-    _WET_THRESH      = _WET_THRESH_MM / NORM_DEPTH
-    _EXTENT_SIGMA_MM = 50.0   # 5 cm — soft wet/dry transition width for dice
-    _EXTENT_SIGMA    = _EXTENT_SIGMA_MM / NORM_DEPTH
+
+    _WET_THRESH = 0.01  # pixels with GT depth > 1 cm are "wet"
 
     @staticmethod
     def _wet_mse(pred: torch.Tensor, target: torch.Tensor,
@@ -191,9 +201,8 @@ class FNOLitModel(pl.LightningModule):
         """
         mask4   = mask.unsqueeze(1)
         gt_wet  = (target > FNOLitModel._WET_THRESH).float() * mask4
-        pred_wet = torch.sigmoid(
-            (pred - FNOLitModel._WET_THRESH) / FNOLitModel._EXTENT_SIGMA
-        ) * mask4
+        # sigma controls transition width; 0.05 m ≈ 5 cm
+        pred_wet = torch.sigmoid((pred - FNOLitModel._WET_THRESH) / 0.05) * mask4
         inter   = (pred_wet * gt_wet).sum()
         union   = pred_wet.sum() + gt_wet.sum()
         return 1.0 - (2.0 * inter + 1e-8) / (union + 1e-8)
@@ -209,39 +218,21 @@ class FNOLitModel(pl.LightningModule):
 
     @staticmethod
     def _hybrid_loss_2(pred: torch.Tensor, target: torch.Tensor,
-                       mask: torch.Tensor, return_components: bool = False):
+                       mask: torch.Tensor) -> torch.Tensor:
         """Flood-focused hybrid loss.
 
-        wet_rmse       — depth accuracy where water exists (main term)
-        0.5*dry_rmse   — suppress false-positive flooding
-        0.3*extent     — inundation boundary accuracy (soft Dice)
-        0.1*ssim       — spatial structure
-        0.5*peak_rmse  — extra pressure on high-depth pixels
-
-        wet/dry/peak terms are sqrt'd (RMSE, not MSE) and denormalised to
-        metres. Left as raw normalised MSE they sit 4-5 orders of magnitude
-        below extent/ssim (~O(0.1-1)) and are numerically invisible in the
-        weighted sum — which silently defeats the depth-accuracy and
-        false-positive terms this loss is supposed to enforce. Denormalising
-        (rather than picking an arbitrary multiplier) puts them in the same
-        physical currency (metres) that _WET_THRESH/_EXTENT_SIGMA are already
-        defined in — still ~3-5x smaller than extent/ssim, but no longer
-        negligible. Inspect the newly-logged val/hybrid_* components and
-        retune these weights against real data if that residual gap matters.
+        wet_mse       — depth accuracy where water exists (main term)
+        0.2*dry_mse   — suppress false-positive flooding
+        0.3*extent    — inundation boundary accuracy (soft Dice)
+        0.1*ssim      — spatial structure
+        0.5*peak_mse  — extra pressure on high-depth pixels
         """
-        eps = 1e-8
-        to_metres = NORM_DEPTH / 1000.0
-        wet_rmse  = torch.sqrt(FNOLitModel._wet_mse(pred, target, mask) + eps) * to_metres
-        dry_rmse  = torch.sqrt(FNOLitModel._dry_mse(pred, target, mask) + eps) * to_metres
+        wet_mse   = FNOLitModel._wet_mse(pred, target, mask)
+        dry_mse   = FNOLitModel._dry_mse(pred, target, mask)
         extent    = FNOLitModel._extent_dice(pred, target, mask)
         ssim_loss = FNOLitModel._ssim_loss(pred, target, mask)
-        pa_rmse   = torch.sqrt(FNOLitModel._peak_aware_mse(pred, target, mask) + eps) * to_metres
-
-        total = wet_rmse + 0.5 * dry_rmse + 0.3 * extent + 0.1 * ssim_loss + 0.5 * pa_rmse
-        if return_components:
-            return total, dict(wet_rmse=wet_rmse, dry_rmse=dry_rmse, extent=extent,
-                                ssim=ssim_loss, peak_rmse=pa_rmse)
-        return total
+        pa_mse    = FNOLitModel._peak_aware_mse(pred, target, mask)
+        return wet_mse + 0.2 * dry_mse + 0.3 * extent + 0.1 * ssim_loss + 0.5 * pa_mse
 
     @staticmethod
     def _masked_mae(pred: torch.Tensor, target: torch.Tensor,
@@ -253,7 +244,7 @@ class FNOLitModel(pl.LightningModule):
         return self.model(x)
 
     def _shared_step(self, batch: tuple, stage: str) -> torch.Tensor:
-        x, rain_future, depth_future, land = batch
+        x, rain_future, wse_future, land = batch
         land      = land.float()
         N         = self.hparams.n_rollout_steps
         on_step   = (stage == 'train')
@@ -261,20 +252,30 @@ class FNOLitModel(pl.LightningModule):
         static    = x[:, :4]    # (B, 4, P, P)  — static channels, constant across steps
         rain_prev = x[:, 4:5]   # Rain_{t-1}
         rain_curr = x[:, 5:6]   # Rain_t
-        depth_in  = x[:, 6:7]   # h_t (initial condition)
+        wse_in    = x[:, 6:7]   # WSE_t (initial condition)
+        dem_m     = x[:, 0:1] * NORM_DEM   # DEM in metres
+
+        # Targets in depth space (metres) — the flood losses threshold on
+        # depth, which is meaningless on raw WSE values.
+        depth_future = wse_future * NORM_DEM - dem_m.unsqueeze(1)
 
         preds_list = []
         phys_loss  = torch.zeros(1, device=x.device, dtype=x.dtype).squeeze()
 
         for k in range(N):
-            x_k  = torch.cat([static, rain_prev, rain_curr, depth_in], dim=1)
-            pred = self(x_k)
+            x_k      = torch.cat([static, rain_prev, rain_curr, wse_in], dim=1)
+            wse_pred = self(x_k)             # network predicts WSE directly
+            # Recover WSE in metres, reduce the DEM → water depth (m) for the
+            # loss. Left unclamped: on dry land the depth target of 0 trains
+            # WSE towards the DEM itself.
+            pred     = wse_pred * NORM_DEM - dem_m
             preds_list.append(pred)       # keep for loss before any detach
 
-            # Physics: penalise depth increases when there is no rainfall.
+            # Physics: penalise depth increases (m) when there is no rainfall.
+            # (WSE increase == depth increase, the DEM cancels out.)
             if self.hparams.lambda_phys > 0:
                 no_rain  = (rain_curr < 1e-3).float()
-                increase = torch.nn.functional.relu(pred - depth_in)
+                increase = torch.nn.functional.relu(wse_pred - wse_in) * NORM_DEM
                 l_phys   = (increase * no_rain * land).sum() / land.sum().clamp(min=1)
                 phys_loss = phys_loss + l_phys
                 self.log(f'{stage}/phys{k+1}', l_phys, on_epoch=True, on_step=False)
@@ -282,7 +283,10 @@ class FNOLitModel(pl.LightningModule):
             # Advance state for next step
             rain_prev = rain_curr
             # Detach to avoid retaining all N computation graphs simultaneously.
-            depth_in  = pred.detach() if self.hparams.truncate_bptt else pred
+            # depth >= 0 ⇔ WSE >= DEM: floor the fed-back state at the DEM so
+            # it stays in the physical range the WSE channel is trained on.
+            wse_next = wse_pred.detach() if self.hparams.truncate_bptt else wse_pred
+            wse_in   = torch.maximum(wse_next, x[:, 0:1])   # normalised DEM floor
             if k < N - 1:
                 rain_curr = rain_future[:, k]  # Rain_{t+k+1}
 
@@ -293,10 +297,7 @@ class FNOLitModel(pl.LightningModule):
         elif self.hparams.loss_fn == 'hybrid':
             total_loss = self._hybrid_loss(preds_all, depth_future, land)
         elif self.hparams.loss_fn == 'hybrid_2':
-            total_loss, components = self._hybrid_loss_2(
-                preds_all, depth_future, land, return_components=True)
-            for name, val in components.items():
-                self.log(f'{stage}/hybrid_{name}', val, on_epoch=True, on_step=on_step)
+            total_loss = self._hybrid_loss_2(preds_all, depth_future, land)
         else:
             total_loss = self._peak_weighted_rmse(preds_all, depth_future, land)
 
@@ -323,17 +324,23 @@ class FNOLitModel(pl.LightningModule):
         self._shared_step(batch, 'test')
 
     def validation_step(self, batch, batch_idx):
-        x, rain_future, depth_future, land = batch
+        x, rain_future, wse_future, land = batch
         self._shared_step(batch, 'val')
 
         # Log 2-step prediction plots once per epoch (first batch only)
         if batch_idx == 0:
             with torch.no_grad():
-                pred1 = self(x)
-                x2    = torch.cat([x[:, :4], x[:, 5:6], rain_future[:, 0], pred1], dim=1)
-                pred2 = self(x2)
-            self._log_depth_figures(pred1, depth_future[:, 0],
-                                    pred2, depth_future[:, 1], land)
+                dem  = x[:, 0:1]
+                wse1 = self(x)
+                x2   = torch.cat([x[:, :4], x[:, 5:6], rain_future[:, 0],
+                                  torch.maximum(wse1, dem)], dim=1)
+                wse2 = self(x2)
+
+                # Figures are plotted in depth space (metres)
+                def _depth(wse):
+                    return (wse - dem) * NORM_DEM
+            self._log_depth_figures(_depth(wse1), _depth(wse_future[:, 0]),
+                                    _depth(wse2), _depth(wse_future[:, 1]), land)
 
     def _log_depth_figures(
         self,
@@ -343,11 +350,9 @@ class FNOLitModel(pl.LightningModule):
     ) -> None:
         """Log a 2×3 figure grid (step1 / step2) × (pred / gt / diff) to TensorBoard.
         Ocean pixels are masked to NaN so only land errors are visible."""
-        from data_loader import NORM_DEPTH
-
-        # Take first sample, denormalise to mm, mask ocean to NaN
+        # Take first sample (already in metres), mask ocean to NaN
         def _np(t: torch.Tensor) -> "np.ndarray":
-            arr = t[0, 0].cpu().float().numpy() * NORM_DEPTH / 1000
+            arr = t[0, 0].cpu().float().numpy()
             arr[land[0, 0].cpu().numpy() == 0] = np.nan
             return arr
 
@@ -471,7 +476,7 @@ def parse_args():
 
 def _auto_exp_name(args) -> str:
     return (
-        f"tfno_fullsamples"
+        f"tfno_wse_fullsamples"
         f"_h{args.hidden_dim}"
         f"_l{args.n_layers}"
         f"_m{args.modes1}x{args.modes2}"
@@ -539,6 +544,8 @@ def main():
             modes2         = args.modes2,
             rank           = args.rank,
             domain_padding = args.domain_padding,
+            predict_wse    = True,   # output is WSE — use inference_wse.py
+            wse_input      = True,   # dynamic state channel is WSE (data_loader_wse)
         ),
     )
 

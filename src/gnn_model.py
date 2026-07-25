@@ -57,7 +57,7 @@ class _GNNLayer(MessagePassing):
         super().__init__(aggr='mean')
         self.msg_mlp = nn.Sequential(
             nn.Linear(hidden_dim + edge_dim, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
         self.upd_mlp = nn.Sequential(
@@ -113,7 +113,13 @@ class GNNFlood(nn.Module):
         self.layers = nn.ModuleList(
             [_GNNLayer(hidden_dim) for _ in range(n_layers)]
         )
-        self.decoder = nn.Linear(hidden_dim, out_channels)
+        # self.decoder = nn.Linear(hidden_dim, out_channels) # gnn one
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, out_channels),
+            nn.Softplus(),
+        )
 
         # Precompute topology for the expected patch size (no edge_attr — computed per sample)
         self.register_buffer('_edge_index', build_grid_edges(patch_size, patch_size))  # (2, E)

@@ -78,6 +78,9 @@ def parse_args():
                    help='Number of autoregressive rollout steps in training loss')
     p.add_argument('--lambda_phys',  type=float, default=0.0,
                    help='Weight for no-rain drainage physics loss (0 = disabled)')
+    p.add_argument('--loss',         default='mse',
+                   choices=['mse', 'peak_weighted_rmse'],
+                   help='Training loss function (default: mse)')
 
     # Infra
     p.add_argument('--log_dir',   default='logs')
@@ -103,6 +106,7 @@ def _auto_exp_name(args) -> str:
         f"_n{args.n_steps}"
         f"_bs{args.batch_size}"
         f"_lr{args.lr}"
+        f"_{args.loss}"
     )
 
 
@@ -155,6 +159,7 @@ def main():
         patience         = args.patience,
         n_rollout_steps  = args.n_steps,
         lambda_phys      = args.lambda_phys,
+        loss_fn          = args.loss,
         model_cfg        = dict(
             model_type   = 'gno',
             in_channels  = args.in_channels,

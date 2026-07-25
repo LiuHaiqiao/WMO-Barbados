@@ -1,23 +1,35 @@
 """
-inference_fno.py — Auto-regressive inference for TFNOFlood (or any trained model).
+inference_wse.py — Auto-regressive inference for WSE-predicting checkpoints
+(trained with train_fno_wse.py).
 
-Rolls out the full water-depth sequence from an initial condition by feeding
-predicted depth back as input at each 1-hr timestep.
+The network's raw output is the water-surface elevation (WSE = DEM + depth);
+each patch prediction is converted to depth (then clamped at 0) before
+Hann-window blending, rollout feedback, and export. Everything downstream
+(GeoTIFF, eval, GIF) is in depth, same as inference.py.
 
-Patch-based inference with Hann-window blending ensures seamless stitching
-of the 512×512 patches back into the full 1080×936 domain.
+Two WSE checkpoint conventions are supported, detected from the saved config.
+In both, depth is obtained by recovering the WSE in metres and reducing the
+DEM (metres) from it — they differ only in how the raw output de-normalises
+and what the state channel is:
+  wse_input=True  (data_loader_wse) — state channel is WSE; output WSE is
+                  normalised by NORM_DEM:      wse_m = out * NORM_DEM
+  wse_input=False (early WSE runs)  — state channel is depth; output WSE is
+                  in normalised-depth units:   wse_m = out * NORM_DEPTH / 1000
+
+Refuses to run checkpoints that were not trained in WSE mode — use
+inference.py for direct depth-predicting checkpoints.
 
 Usage
 -----
-python inference_fno.py \\
-    --ckpt_path  logs/tfno_.../checkpoints/best.ckpt \\
+python inference_wse.py \\
+    --ckpt_path  logs/tfno_wse_.../checkpoints/best.ckpt \\
     --model_type fno \\
     --data_dir   /home/hl1138/TFNO/data \\
     --out_path   /home/hl1138/TFNO/predictions/pred_depth.tif
 
 # evaluate against ground truth and save per-timestep metrics
-python inference_fno.py \\
-    --ckpt_path  logs/tfno_.../checkpoints/best.ckpt \\
+python inference_wse.py \\
+    --ckpt_path  logs/tfno_wse_.../checkpoints/best.ckpt \\
     --model_type fno \\
     --data_dir   /home/hl1138/TFNO/data \\
     --out_path   pred_depth.tif \\
@@ -115,7 +127,8 @@ def patched_forward(
     device:     torch.device,
     hann:       torch.Tensor,       # (1, P, P) weight map
 ) -> torch.Tensor:
-    """Run model on overlapping patches and blend into a (1, H, W) output."""
+    """Run model on overlapping patches, convert WSE → depth (metres), and
+    blend into a (1, H, W) depth output."""
     # GNN precomputes edges for a fixed patch size — verify it matches
     if hasattr(model, 'patch_size') and model.patch_size != patch_size:
         raise ValueError(
@@ -127,11 +140,18 @@ def patched_forward(
     pred_acc   = torch.zeros(1, H, W)
     weight_acc = torch.zeros(1, H, W)
     p = patch_size
+    # Set by load_model: True → output WSE normalised by NORM_DEM
+    # (data_loader_wse); False → WSE in normalised-depth units (early ckpts).
+    wse_input = getattr(model, 'wse_input', False)
 
     for r, c in _patch_offsets(H, W, patch_size, stride):
         patch = x_full[:, r:r+p, c:c+p].unsqueeze(0).to(device)   # (1,7,P,P)
-        out   = model(patch).squeeze(0).cpu().clamp(min=0.0)        # (1,P,P)
-        pred_acc  [:, r:r+p, c:c+p] += out  * hann
+        out   = model(patch).squeeze(0).cpu()                       # (1,P,P)
+        dem_m = x_full[0:1, r:r+p, c:c+p] * NORM_DEM                # DEM in metres
+        # Recover WSE in metres, reduce the DEM → water depth (m)
+        wse_m = out * NORM_DEM if wse_input else out * NORM_DEPTH / 1000.0
+        depth = (wse_m - dem_m).clamp(min=0.0)
+        pred_acc  [:, r:r+p, c:c+p] += depth * hann
         weight_acc[:, r:r+p, c:c+p] += hann
 
     return pred_acc / weight_acc.clamp(min=1e-8)
@@ -182,24 +202,34 @@ def run_inference(
 
     hann = _hann2d(patch_size)
 
+    # wse_input checkpoints take WSE = (DEM_m + depth_m) / NORM_DEM as the
+    # dynamic state channel; older WSE checkpoints take normalised depth.
+    # Set by load_model. Depth itself flows through this loop in metres.
+    wse_input = getattr(model, 'wse_input', False)
+    dem_m     = static[0:1] * NORM_DEM   # (1, H, W) — DEM in metres
+
+    def _state(depth_m: torch.Tensor) -> torch.Tensor:
+        if wse_input:
+            return (dem_m + depth_m) / NORM_DEM        # WSE state
+        return depth_m * 1000.0 / NORM_DEPTH           # normalised-depth state
+
     if start_step == 0:
-        depth_t   = torch.zeros_like(rain_seq[0])   # cold start
+        depth_t   = torch.zeros_like(rain_seq[0])   # cold start (m)
         rain_prev = torch.zeros_like(rain_seq[0])
     else:
         depth_files = sorted((data_dir / 'depth_timesteps').glob('depth_hr????.00.tif'))
-        depth_t   = torch.from_numpy(_read(depth_files[start_step])[None] / NORM_DEPTH)
+        depth_t   = torch.from_numpy(_read(depth_files[start_step])[None] / 1000.0)  # mm → m
         rain_prev = rain_seq[start_step - 1]
 
     predictions = []
     for t in tqdm(range(start_step, end_step), desc='Rolling out', unit='step'):
         rain_t = rain_seq[t]
-        x_full = torch.cat([static, rain_prev, rain_t, depth_t], dim=0)  # (7,H,W)
-        depth_next = patched_forward(
+        x_full = torch.cat([static, rain_prev, rain_t, _state(depth_t)], dim=0)  # (7,H,W)
+        depth_t = patched_forward(
             model, x_full, patch_size, stride, device, hann
-        )                                                                  # (1,H,W) norm
-        predictions.append(depth_next * NORM_DEPTH / 1000.0)              # → m
+        )                                                                  # (1,H,W) metres
+        predictions.append(depth_t)
         rain_prev = rain_t
-        depth_t   = depth_next
 
     return predictions, static, land_mask
 
@@ -579,11 +609,26 @@ def load_model(ckpt_path: Path, model_type: str, args) -> torch.nn.Module:
     else:
         raise ValueError(f'Unknown model_type: {model_type}')
 
+    # Guard: this script subtracts the DEM from the raw output, which is only
+    # correct for WSE-trained checkpoints (train_fno_wse.py).
+    hp = ckpt.get('hyper_parameters', {}) or {}
+    if not (hp.get('predict_wse') or cfg.get('predict_wse')):
+        raise ValueError(
+            f'{ckpt_path} was not trained in WSE mode (no predict_wse=True in '
+            f'its saved config). Run it with inference.py instead.'
+        )
+
     state = {k[len('model.'):]: v
              for k, v in ckpt['state_dict'].items()
              if k.startswith('model.')}
     model.load_state_dict(state)
     model.eval()
+
+    # Input-state convention: True → dynamic channel is WSE (data_loader_wse);
+    # False → depth (early WSE checkpoints). run_inference reads this flag.
+    model.wse_input = bool(hp.get('wse_input') or cfg.get('wse_input'))
+    print(f'[load_model] input state: {"WSE" if model.wse_input else "depth"}  '
+          f'(output: WSE, exported as depth)')
     return model
 
 
@@ -592,7 +637,9 @@ def load_model(ckpt_path: Path, model_type: str, args) -> torch.nn.Module:
 # --------------------------------------------------------------------------- #
 
 def parse_args():
-    p = argparse.ArgumentParser(description='Auto-regressive flood depth inference')
+    p = argparse.ArgumentParser(
+        description='Auto-regressive flood inference for WSE-predicting '
+                    'checkpoints (depth = WSE - DEM)')
 
     p.add_argument('--ckpt_path',  required=True, help='Lightning checkpoint (.ckpt)')
     p.add_argument('--data_dir',   required=True,

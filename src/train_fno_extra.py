@@ -1,16 +1,25 @@
 """
-train_fno.py — PyTorch Lightning training script for TFNOFlood.
+train_fno_extra.py — PyTorch Lightning training script for TFNOFlood, with
+two additional static features: flow accumulation and soil type.
+
+Identical to train_fno.py in every respect (losses, rollout, logging) except
+the static feature stack grows from 4 to 6 channels via data_loader_extra.py:
+
+    [DEM, Manning, Pervious, Slope, FlowAccLog, SoilType, Rain_{t-1}, Rain_t, Depth_t]
+
+so in_channels is 9 instead of 7. Checkpoints record extra_static=True in
+model_cfg for provenance.
 
 Usage
 -----
 # single GPU
-python train_fno.py --data_dirs /home/hl1138/TFNO/data
+python train_fno_extra.py --data_dirs /home/hl1138/TFNO/data
 
 # multiple simulation dirs
-python train_fno.py --data_dirs /path/sim1 /path/sim2 --batch_size 8
+python train_fno_extra.py --data_dirs /path/sim1 /path/sim2 --batch_size 8
 
 # resume from checkpoint
-python train_fno.py --data_dirs /home/hl1138/TFNO/data --ckpt_path logs/tfno/version_0/checkpoints/best.ckpt
+python train_fno_extra.py --data_dirs /home/hl1138/TFNO/data --ckpt_path logs/tfno_extra/version_0/checkpoints/best.ckpt
 """
 
 import argparse
@@ -32,7 +41,8 @@ from pytorch_lightning.loggers import TensorBoardLogger
 
 from torchmetrics.functional.image import structural_similarity_index_measure as ssim_metric
 
-from data_loader import build_loaders, NORM_DEPTH
+from data_loader import NORM_DEPTH
+from data_loader_extra import build_loaders
 from fno_model import TFNOFlood
 
 
@@ -258,10 +268,10 @@ class FNOLitModel(pl.LightningModule):
         N         = self.hparams.n_rollout_steps
         on_step   = (stage == 'train')
 
-        static    = x[:, :4]    # (B, 4, P, P)  — static channels, constant across steps
-        rain_prev = x[:, 4:5]   # Rain_{t-1}
-        rain_curr = x[:, 5:6]   # Rain_t
-        depth_in  = x[:, 6:7]   # h_t (initial condition)
+        static    = x[:, :6]    # (B, 6, P, P)  — static channels, constant across steps
+        rain_prev = x[:, 6:7]   # Rain_{t-1}
+        rain_curr = x[:, 7:8]   # Rain_t
+        depth_in  = x[:, 8:9]   # h_t (initial condition)
 
         preds_list = []
         phys_loss  = torch.zeros(1, device=x.device, dtype=x.dtype).squeeze()
@@ -330,7 +340,7 @@ class FNOLitModel(pl.LightningModule):
         if batch_idx == 0:
             with torch.no_grad():
                 pred1 = self(x)
-                x2    = torch.cat([x[:, :4], x[:, 5:6], rain_future[:, 0], pred1], dim=1)
+                x2    = torch.cat([x[:, :6], x[:, 7:8], rain_future[:, 0], pred1], dim=1)
                 pred2 = self(x2)
             self._log_depth_figures(pred1, depth_future[:, 0],
                                     pred2, depth_future[:, 1], land)
@@ -417,7 +427,8 @@ def parse_args():
     p.add_argument('--samples_dir', default='/home/hl1138/surrogate/data/samples',
                    help='Root directory containing all simulation sample subdirs')
     p.add_argument('--static_dir',  default='/home/hl1138/surrogate/data/parms_bands',
-                   help='Shared static features directory (DEM, Manning, etc.)')
+                   help='Shared static features directory (DEM, Manning, Slope, '
+                        'Pervious, flow_accum.tif, soil_type.tif, etc.)')
     p.add_argument('--patch_size',  type=int,   default=512)
     p.add_argument('--stride',      type=int,   default=568)
     p.add_argument('--val_split',   type=float, default=0.15)
@@ -425,7 +436,9 @@ def parse_args():
     p.add_argument('--num_workers', type=int,   default=4)
 
     # Model
-    p.add_argument('--in_channels',    type=int,   default=7)
+    p.add_argument('--in_channels',    type=int,   default=9,
+                   help='6 static (DEM, Manning, Pervious, Slope, FlowAccLog, '
+                        'SoilType) + 3 dynamic (Rain_t-1, Rain_t, Depth_t)')
     p.add_argument('--hidden_dim',     type=int,   default=64)
     p.add_argument('--n_layers',       type=int,   default=4)
     p.add_argument('--modes1',         type=int,   default=16)
@@ -471,7 +484,7 @@ def parse_args():
 
 def _auto_exp_name(args) -> str:
     return (
-        f"tfno_fullsamples"
+        f"tfno_extra_fullsamples"
         f"_h{args.hidden_dim}"
         f"_l{args.n_layers}"
         f"_m{args.modes1}x{args.modes2}"
@@ -539,6 +552,7 @@ def main():
             modes2         = args.modes2,
             rank           = args.rank,
             domain_padding = args.domain_padding,
+            extra_static   = True,   # 6 static channels via data_loader_extra
         ),
     )
 

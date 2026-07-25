@@ -40,9 +40,9 @@ def parse_args():
     p = argparse.ArgumentParser(description='Train UNetFlood (CNN baseline)')
 
     # Data
-    p.add_argument('--samples_dir', default='/home/hl1138/TFNO/data/samples',
+    p.add_argument('--samples_dir', default='/home/hl1138/surrogate/data/samples',
                    help='Root directory containing all simulation sample subdirs')
-    p.add_argument('--static_dir',  default='/home/hl1138/TFNO/data/parms_bands',
+    p.add_argument('--static_dir',  default='/home/hl1138/surrogate/data/parms_bands',
                    help='Shared static features directory (DEM, Manning, etc.)')
     p.add_argument('--patch_size',  type=int,   default=512)
     p.add_argument('--stride',      type=int,   default=568)
@@ -66,10 +66,13 @@ def parse_args():
                    help='ReduceLROnPlateau patience')
     p.add_argument('--early_stop',   type=int,   default=15,
                    help='EarlyStopping patience (epochs); 0 to disable')
-    p.add_argument('--n_steps',      type=int,   default=2,
+    p.add_argument('--n_steps',      type=int,   default=4,
                    help='Number of autoregressive rollout steps in training loss')
     p.add_argument('--lambda_phys',  type=float, default=0.0,
                    help='Weight for no-rain drainage physics loss (0 = disabled)')
+    p.add_argument('--loss',         default='mse',
+                   choices=['mse', 'peak_weighted_rmse', 'hybrid', 'hybrid_2'],
+                   help='Training loss function (default: mse)')
 
     # Infra
     p.add_argument('--log_dir',   default='logs')
@@ -93,6 +96,7 @@ def _auto_exp_name(args) -> str:
         f"_n{args.n_steps}"
         f"_bs{args.batch_size}"
         f"_lr{args.lr}"
+        f"_{args.loss}"
     )
 
 
@@ -140,6 +144,7 @@ def main():
         patience         = args.patience,
         n_rollout_steps  = args.n_steps,
         lambda_phys      = args.lambda_phys,
+        loss_fn          = args.loss,
         model_cfg        = dict(
             model_type    = 'cnn',
             in_channels   = args.in_channels,
